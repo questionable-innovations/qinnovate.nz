@@ -12,7 +12,7 @@
 	:global(html, body) {
 		margin: 0;
 		height: 100%;
-		background: #dcdde3;
+		background: #13151c;
 		overflow: hidden;
 	}
 </style>

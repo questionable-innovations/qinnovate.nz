@@ -100,7 +100,7 @@
 	<canvas bind:this={canvas} class:unsupported></canvas>
 </div>
 {#if unsupported}
-	<span class="fallback" aria-hidden="true">?</span>
+	<span class="fallback" aria-hidden="true">Q</span>
 {/if}
 
 <style>
@@ -110,7 +110,7 @@
 		width: 100%;
 		height: 100%;
 		display: block;
-		background: #dcdde3;
+		background: #13151c;
 		touch-action: none;
 	}
 	canvas.unsupported { visibility: hidden; }
@@ -120,7 +120,7 @@
 		display: grid;
 		place-items: center;
 		font: 700 min(62vh, 62vw) / 1 ui-serif, Georgia, serif;
-		color: #23212b;
-		background: #dcdde3;
+		color: #e9eaf1;
+		background: #13151c;
 	}
 </style>

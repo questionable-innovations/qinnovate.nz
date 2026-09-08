@@ -11,9 +11,9 @@ uniform vec3 uPulse;   // xy: glyph-space origin of last tap, z: seconds since
 uniform float uMotion; // 0 = reduced motion
 
 // ---- palette (see README design notes) ----
-const vec3 GROUND = vec3(0.863, 0.867, 0.890); // #dcdde3 zinc
-const vec3 INK    = vec3(0.137, 0.129, 0.169); // #23212b
-const vec3 RULE   = vec3(0.369, 0.361, 0.431); // #5e5c6e
+const vec3 GROUND = vec3(0.075, 0.082, 0.110); // #13151c deep slate
+const vec3 LIGHT  = vec3(0.914, 0.918, 0.945); // #e9eaf1 pale glass
+const vec3 RULE   = vec3(0.412, 0.431, 0.510); // #696e82 dim rule
 
 // ---- noise ----
 float hash(vec2 p) {
@@ -57,17 +57,13 @@ float smin(float a, float b, float k) {
 
 const float W = 0.072; // stroke half-width
 
-// The question mark. About 1 unit tall, centred on the origin.
+// The Q. About 1 unit tall, centred on the origin.
 float glyph(vec2 p) {
-	float R = 0.30;
-	vec2 c = vec2(0.0, 0.28);
-	vec2 q = p - c;
-	float a = 0.7853982; // rotate 45deg so the open side of the hook sits bottom-left
-	q = mat2(cos(a), sin(a), -sin(a), cos(a)) * q;
-	float hook = sdArc(q, vec2(sin(2.3561945), cos(2.3561945)), R, W);
-	float stem = sdSegment(p, vec2(0.0, c.y - R + 0.02), vec2(0.0, -0.20)) - W;
-	float dot_ = length(p - vec2(0.0, -0.44)) - W * 1.08;
-	return min(smin(hook, stem, 0.06), dot_);
+	float R = 0.36;
+	vec2 c = vec2(0.0, 0.05);
+	float bowl = abs(length(p - c) - R) - W;
+	float tail = sdSegment(p, c + vec2(0.68, -0.73) * 0.30, c + vec2(0.68, -0.73) * 0.64) - W * 0.92;
+	return smin(bowl, tail, 0.05);
 }
 
 // Warped field: the glyph never quite holds still.
@@ -132,25 +128,25 @@ void main() {
 	vec3 col = GROUND;
 
 	// outside: quiet rules
-	col = mix(col, RULE, outsideRules * 0.34 * (1.0 - inside));
-	// inside: rules refracted, darker, brighter contrast
-	col = mix(col, INK, ruled * 0.62 * inside);
-	col = mix(col, INK, 0.05 * inside);
+	col = mix(col, RULE, outsideRules * 0.30 * (1.0 - inside));
+	// inside: rules refracted and lit, glass body faintly milky
+	col = mix(col, LIGHT, 0.06 * inside);
+	col = mix(col, LIGHT, ruled * 0.78 * inside);
 
 	// thin-film rim, hue drifts with pointer + time
 	float rim = 1.0 - smoothstep(0.0, 0.02, abs(d + 0.004));
 	float film = d * 42.0 + uTime * 0.05 * uMotion + uMouse.x * 0.35 + uMouse.y * 0.2;
-	vec3 iri = mix(spectrum(film), INK, 0.35);
+	vec3 iri = mix(spectrum(film), LIGHT, 0.15);
 	col = mix(col, iri, rim * 0.5);
 
-	// soft contact shadow just outside the glass
-	float shade = (1.0 - smoothstep(0.0, 0.05, d)) * (1.0 - inside);
-	col = mix(col, INK, shade * 0.09);
+	// soft glow just outside the glass
+	float shade = (1.0 - smoothstep(0.0, 0.06, d)) * (1.0 - inside);
+	col = mix(col, iri, shade * 0.10);
 
 	// paper grain, vignette
 	float grain = hash(gl_FragCoord.xy + fract(uTime) * 7.0) - 0.5;
-	col += grain * 0.028;
-	col *= 1.0 - 0.18 * dot(uv, uv);
+	col += grain * 0.022;
+	col *= 1.0 - 0.30 * dot(uv, uv);
 
 	fragColor = vec4(col, 1.0);
 }
