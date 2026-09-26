@@ -1,0 +1,13 @@
+{
+	"name": "Questionable Innovations",
+	"short_name": "QInnovate",
+	"start_url": "/",
+	"display": "standalone",
+	"background_color": "#0e1117",
+	"theme_color": "#0e1117",
+	"icons": [
+		{ "src": "/favicon.svg", "type": "image/svg+xml", "sizes": "any" },
+		{ "src": "/apple-touch-icon.png", "type": "image/png", "sizes": "180x180" },
+		{ "src": "/icon-512.png", "type": "image/png", "sizes": "512x512" }
+	]
+}
