@@ -37,15 +37,37 @@ export type StageOptions = {
 	maxDpr?: number;
 	/** clamp for drag pitch, radians */
 	pitchLimit?: number;
+	/** called if the piece is abandoned after starting because frames are hopelessly slow */
+	onFail?: () => void;
 };
 
-export function mount(canvas: HTMLCanvasElement, setup: Setup, opts: StageOptions = {}): (() => void) | null {
+// software rasterisers: WebGL "works" but draws on the CPU, and a full-screen scene can
+// lock up the whole machine rather than just the tab
+const SOFTWARE = /swiftshader|llvmpipe|softpipe|lavapipe|software|basic render|mesa offscreen/i;
+
+/** a WebGL2 context only if it's hardware-accelerated; `?gl=off` forces the fallback, `?gl=force` skips the check */
+function context(canvas: HTMLCanvasElement, antialias: boolean): WebGL2RenderingContext | null {
+	const mode = new URLSearchParams(location.search).get('gl');
+	if (mode === 'off') return null;
 	const gl = canvas.getContext('webgl2', {
-		antialias: opts.antialias ?? (devicePixelRatio || 1) < 2,
+		antialias,
 		alpha: false,
 		premultipliedAlpha: false,
-		powerPreference: 'high-performance'
+		powerPreference: 'high-performance',
+		failIfMajorPerformanceCaveat: mode !== 'force'
 	});
+	if (!gl || mode === 'force') return gl;
+	const info = gl.getExtension('WEBGL_debug_renderer_info');
+	const renderer = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
+	if (SOFTWARE.test(renderer)) {
+		gl.getExtension('WEBGL_lose_context')?.loseContext();
+		return null;
+	}
+	return gl;
+}
+
+export function mount(canvas: HTMLCanvasElement, setup: Setup, opts: StageOptions = {}): (() => void) | null {
+	const gl = context(canvas, opts.antialias ?? (devicePixelRatio || 1) < 2);
 	if (!gl) return null;
 
 	const compile = (type: number, src: string) => {
@@ -141,6 +163,26 @@ export function mount(canvas: HTMLCanvasElement, setup: Setup, opts: StageOption
 	addEventListener('pointercancel', onUp);
 	document.addEventListener('pointerleave', onLeave);
 
+	// watchdog: detection misses some software paths (and some GPUs are just that weak), so
+	// time the first frames' real render cost and give up if it's hopeless. rAF gaps won't do:
+	// browsers throttle rAF for occluded windows and power saving, even on fast GPUs
+	const costs: number[] = [];
+	const pixel = new Uint8Array(4);
+	let watching = true;
+	const watch = (cost: number) => {
+		costs.push(cost);
+		const spent = costs.reduce((a, b) => a + b, 0);
+		if (costs.length < 12 && spent < 4) return;
+		watching = false;
+		// skip the first couple, which carry shader compiles and uploads
+		const sorted = costs.slice(2).sort((a, b) => a - b);
+		const median = sorted[sorted.length >> 1] ?? spent;
+		if (median > 1 / 12) {
+			stop();
+			opts.onFail?.();
+		}
+	};
+
 	const start = performance.now();
 	let prev = start;
 	let raf = 0;
@@ -157,7 +199,14 @@ export function mount(canvas: HTMLCanvasElement, setup: Setup, opts: StageOption
 			ctx.orbit.vyaw *= damp;
 			ctx.orbit.vpitch *= damp;
 		}
+		const t0 = performance.now();
 		piece.frame((now - start) / 1000, dt);
+		if (watching) {
+			// reading a pixel back waits for the GPU to actually finish the frame
+			gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+			watch((performance.now() - t0) / 1000);
+			if (stopped) return;
+		}
 		raf = requestAnimationFrame(frame);
 	};
 	const run = () => {
@@ -169,8 +218,12 @@ export function mount(canvas: HTMLCanvasElement, setup: Setup, opts: StageOption
 	const onVis = () => (document.hidden ? cancelAnimationFrame(raf) : run());
 	document.addEventListener('visibilitychange', onVis);
 
-	return () => {
+	let stopped = false;
+	const stop = () => {
+		if (stopped) return;
+		stopped = true;
 		cancelAnimationFrame(raf);
+		raf = 0;
 		ro.disconnect();
 		reduced.removeEventListener('change', onMotion);
 		removeEventListener('pointermove', onMove);
@@ -180,7 +233,10 @@ export function mount(canvas: HTMLCanvasElement, setup: Setup, opts: StageOption
 		document.removeEventListener('pointerleave', onLeave);
 		document.removeEventListener('visibilitychange', onVis);
 		piece.destroy?.();
+		// hand the GPU (or CPU) back straight away rather than waiting for GC
+		gl.getExtension('WEBGL_lose_context')?.loseContext();
 	};
+	return stop;
 }
 
 // ---- tiny column-major mat4 kit ----

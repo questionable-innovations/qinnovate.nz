@@ -881,7 +881,8 @@ export const createKessler = (hooks: KesslerHooks = {}): Setup => (ctx) => {
 		const dy = ctx.orbit.yaw - lastYaw, dp = ctx.orbit.pitch - lastPitch;
 		lastYaw = ctx.orbit.yaw;
 		lastPitch = ctx.orbit.pitch;
-		if (dy || dp) spin = r3.fix(r3.mul(spin, r3.mul(r3.y(dy), r3.x(-dp))));
+		// grab-the-globe: the scene follows the pointer both ways (camera moves opposite)
+		if (dy || dp) spin = r3.fix(r3.mul(spin, r3.mul(r3.y(-dy), r3.x(-dp))));
 		cam = camera(r3.mul(base(yaw, pitch), spin), aspect, 1 + 0.5 * (1 - k));
 		const dprS = Math.sqrt(ctx.dpr);
 		const limb = easeOut(ramp(intro, 0.1, 1.9));

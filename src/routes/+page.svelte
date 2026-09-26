@@ -142,7 +142,7 @@
 	{@html `<script type="application/ld+json">${jsonld}</script>`}
 </svelte:head>
 
-<Stage {setup} ground={GROUND} options={{ pitchLimit: Infinity }} />
+<Stage {setup} ground={GROUND} poster="/poster.avif" options={{ pitchLimit: Infinity }} />
 
 <svg class="leader" aria-hidden="true">
 	<path bind:this={leader} pathLength="1" />

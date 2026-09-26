@@ -2,13 +2,24 @@
 	import { onMount } from 'svelte';
 	import { mount, type Setup, type StageOptions } from './stage';
 
-	let { setup, options = {}, ground = '#13151c' }: { setup: Setup; options?: StageOptions; ground?: string } = $props();
+	let {
+		setup,
+		options = {},
+		ground = '#13151c',
+		poster
+	}: {
+		setup: Setup;
+		options?: StageOptions;
+		ground?: string;
+		/** still shown instead when there's no hardware-accelerated WebGL2 */
+		poster?: string;
+	} = $props();
 
 	let canvas: HTMLCanvasElement;
 	let unsupported = $state(false);
 
 	onMount(() => {
-		const stop = mount(canvas, setup, options);
+		const stop = mount(canvas, setup, { ...options, onFail: () => (unsupported = true) });
 		if (!stop) unsupported = true;
 		return () => stop?.();
 	});
@@ -18,7 +29,12 @@
 	<meta name="theme-color" content={ground} />
 </svelte:head>
 
-<div role="img" aria-label="QInnovate" style:--ground={ground}>
+<div
+	role="img"
+	aria-label="QInnovate"
+	style:--ground={ground}
+	style:--poster={unsupported && poster ? `url(${poster})` : undefined}
+>
 	<canvas bind:this={canvas} class:unsupported></canvas>
 </div>
 
@@ -31,7 +47,7 @@
 	div {
 		position: fixed;
 		inset: 0;
-		background: var(--ground);
+		background: var(--ground) var(--poster, none) center / cover no-repeat;
 	}
 	canvas {
 		width: 100%;
@@ -44,6 +60,6 @@
 		cursor: grabbing;
 	}
 	canvas.unsupported {
-		visibility: hidden;
+		display: none;
 	}
 </style>
