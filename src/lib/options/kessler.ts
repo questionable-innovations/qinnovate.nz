@@ -12,6 +12,7 @@ const C_GROUND = [14 / 255, 17 / 255, 23 / 255];
 const C_LIGHT = [0.914, 0.918, 0.945];
 const C_RULE = [0.412, 0.431, 0.51];
 const C_SODIUM = [0.851, 0.647, 0.357];
+const C_RED = [0.92, 0.22, 0.2];
 
 const TAU = Math.PI * 2;
 const DEG = Math.PI / 180;
@@ -70,8 +71,10 @@ uniform float uDist;
 uniform float uGain;
 uniform float uIntro; // seconds since load; large once settled
 uniform float uPickMin; // pick pass: minimum point size so small dots are easy to hit
+uniform vec4 uInf;      // xyz: where the infection started, w: how far it has reached (0 = none)
 out float vA;
 out float vSod;
+out float vRed;
 flat out float vId;
 ${ORBIT}
 float hash1(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
@@ -79,6 +82,7 @@ void main() {
 	float age = uT - aEl2.w;
 	vId = float(gl_VertexID);
 	vSod = 0.0;
+	vRed = 0.0;
 	if (age < 0.0) {
 		gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
 		gl_PointSize = 0.0;
@@ -109,6 +113,15 @@ void main() {
 	b -= vSod * 10.0;
 	float flash = exp(-age * 2.2);
 
+	// the infection: each dot turns once the wave reaches it, a little early or late so it spreads
+	// like a contagion rather than a sphere, flaring as it goes and glowing a touch after
+	if (uInf.w > 0.0) {
+		float lag = uInf.w - length(p - uInf.xyz) - 0.45 * hash1(float(gl_VertexID) * 1.7 + 3.1);
+		vRed = step(0.0, lag);
+		b = mix(b, max(b, 0.5), vRed) * (1.0 + 2.5 * vRed * exp(-lag * 7.0));
+		lit = mix(lit, max(lit, 0.5), vRed);
+	}
+
 	float alpha = b * mix(0.07, 1.0, lit) * mix(0.45, 1.0, smoothstep(-1.1, 0.9, side)) * near;
 	// a new cloud fades in as it opens up, so the burst never reads as a blob
 	alpha *= mix(0.03, 1.0, clamp(age / 14.0, 0.0, 1.0)) * (1.0 + 1.5 * flash)
@@ -126,13 +139,15 @@ const DEBRIS_FS = /* glsl */ `#version 300 es
 precision highp float;
 in float vA;
 in float vSod;
+in float vRed;
 uniform vec3 uColor;
 uniform vec3 uSodium;
+uniform vec3 uRed;
 out vec4 o;
 void main() {
 	float r = length(gl_PointCoord * 2.0 - 1.0);
 	float m = 1.0 - smoothstep(0.3, 1.0, r);
-	o = vec4(mix(uColor, uSodium, vSod), vA * m);
+	o = vec4(mix(mix(uColor, uSodium, vSod), uRed, vRed), vA * m);
 }`;
 
 // pick pass: each visible dot writes its index (+1) as a colour
@@ -558,6 +573,8 @@ export type KesslerHooks = {
 	track?: (x: number, y: number, visible: number) => void;
 	/** someone shot down the tracked object */
 	qi?: () => void;
+	/** someone tapped one of the red dots that rise out of their wreckage */
+	rick?: () => void;
 	/** fired once when the opening sequence has settled */
 	settled?: () => void;
 };
@@ -613,7 +630,7 @@ export const createKessler = (hooks: KesslerHooks = {}): Setup => (ctx) => {
 	const pPlanet = ctx.program(PLANET_VS, PLANET_FS);
 	const U = (p: WebGLProgram, names: string[]) =>
 		Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(p, n)])) as Record<string, WebGLUniformLocation | null>;
-	const DEBRIS_U = ['uVP', 'uEye', 'uSun', 'uT', 'uK', 'uPx', 'uDist', 'uGain', 'uColor', 'uSodium', 'uIntro', 'uPickMin'];
+	const DEBRIS_U = ['uVP', 'uEye', 'uSun', 'uT', 'uK', 'uPx', 'uDist', 'uGain', 'uColor', 'uSodium', 'uRed', 'uIntro', 'uPickMin', 'uInf'];
 	const uD = U(pDebris, DEBRIS_U);
 	const uK = U(pPick, DEBRIS_U);
 	const uL = U(pLine, ['uVP', 'uEye', 'uEl', 'uArgp', 'uMode', 'uM', 'uLen', 'uAlpha', 'uColor']);
@@ -716,6 +733,10 @@ export const createKessler = (hooks: KesslerHooks = {}): Setup => (ctx) => {
 		gl.uniform1f(u.uGain, gain);
 		gl.uniform3fv(u.uColor, C_LIGHT);
 		gl.uniform3fv(u.uSodium, C_SODIUM);
+		gl.uniform3fv(u.uRed, C_RED);
+		// it takes hold slowly, then tears through the whole swarm
+		const ti = rickAt >= 0 ? intro - rickAt : 0;
+		gl.uniform4f(u.uInf, rickPos[0], rickPos[1], rickPos[2], rickAt >= 0 ? 0.02 + 0.35 * ti + 0.9 * ti * ti : 0);
 		gl.uniform1f(u.uPickMin, pickMin);
 	};
 	const drawDebris = () => {
@@ -800,6 +821,8 @@ export const createKessler = (hooks: KesslerHooks = {}): Setup => (ctx) => {
 			posOf(parent, t, ringPos);
 			ringAt = intro;
 			ringColor = C_LIGHT;
+			// keep at it long enough and something starts coming round the back of the planet
+			if (++kills >= RED_AFTER) spawnRed(t);
 		}
 		burst(el, M, t, birth, false);
 		// the parent is gone: it is the cloud now
@@ -825,6 +848,49 @@ export const createKessler = (hooks: KesslerHooks = {}): Setup => (ctx) => {
 	// the visitor's accumulated drag, applied in the camera's own frame
 	let spin: R3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
 	let lastYaw = ctx.orbit.yaw, lastPitch = ctx.orbit.pitch;
+
+	// the red dots: hover values at or below RED_H index into `reds`
+	const RED_MAX = 24, RED_H = -10, RED_AFTER = 15;
+	const reds: { el: El; M: number; t0: number; born: number }[] = [];
+	let kills = 0;
+	// the red dot that was clicked, pinned where it was while the next page loads
+	let rickAt = -99;
+	const rickPos = [0, 0, 0];
+	const redPos = (k: number, out: number[]) => {
+		const { el, M, t0 } = reds[k];
+		return orbitE(el.a, el.e, el.inc, el.raan, el.argp, kepler(wrap(M + nOf(el.a) * (sim - t0)), el.e), out);
+	};
+	/** a red dot on some random low orbit, starting from anywhere hidden behind the planet */
+	const spawnRed = (t: number) => {
+		const el: El = { a: 1.12 + 0.4 * r(), e: 0.002 * r(), inc: r() * Math.PI, raan: r() * TAU, argp: r() * TAU };
+		const N = 240, step = TAU / N;
+		const hid: number[] = [];
+		let far = 0, farD = Infinity;
+		for (let i = 0; i < N; i++) {
+			orbitE(el.a, el.e, el.inc, el.raan, el.argp, kepler(i * step, el.e), tmp);
+			if (occluded(cam.eye, tmp)) hid.push(i);
+			const toEye = tmp[0] * cam.eye[0] + tmp[1] * cam.eye[1] + tmp[2] * cam.eye[2];
+			if (toEye < farD) (farD = toEye), (far = i);
+		}
+		const M = (hid.length ? hid[Math.floor(r() * hid.length)] : far) * step;
+		reds.push({ el, M, t0: t, born: intro });
+		if (reds.length > RED_MAX) reds.shift();
+	};
+	const redHit = (x: number, y: number, R: number) => {
+		for (let k = reds.length - 1; k >= 0; k--) {
+			if (intro - reds[k].born < 0.6) continue;
+			redPos(k, tmp);
+			if (!occluded(cam.eye, tmp) && pxTo(x, y, tmp) < R) return k;
+		}
+		return -1;
+	};
+
+	/** clicked a red dot: pin it, and let it infect everything while the browser moves on */
+	const rickroll = (pos: number[]) => {
+		rickPos.splice(0, 3, ...pos);
+		rickAt = intro;
+		hooks.rick?.();
+	};
 
 	const qiHit = (x: number, y: number, R: number) =>
 		qiAlive && !occluded(cam.eye, trackPos) && pxTo(x, y, trackPos) < R;
@@ -904,9 +970,13 @@ export const createKessler = (hooks: KesslerHooks = {}): Setup => (ctx) => {
 		if (pendingTap) {
 			const [x, y] = pendingTap;
 			pendingTap = null;
-			if (ready) {
+			if (ready && rickAt < 0) {
 				const R = ctx.coarse ? 28 : 18;
-				if (hover === QI || qiHit(x, y, R + 4)) destroyQI();
+				const red = hover <= RED_H ? RED_H - hover : redHit(x, y, R + 4);
+				if (red >= 0 && red < reds.length) {
+					rickroll(redPos(red, tmp));
+					reds.splice(red, 1);
+				} else if (hover === QI || qiHit(x, y, R + 4)) destroyQI();
 				else {
 					// what the ring shows is what gets hit; otherwise the dot under the finger
 					const p = hover >= 0 && alive(hover) ? hover : pickAt(x, y, R);
@@ -919,9 +989,11 @@ export const createKessler = (hooks: KesslerHooks = {}): Setup => (ctx) => {
 		}
 
 		// hover (mouse only): lock onto the dot under the pointer, re-picking as it moves
-		if (!ctx.coarse && ctx.pointer.inside && !ctx.orbit.dragging && ready) {
+		if (!ctx.coarse && ctx.pointer.inside && !ctx.orbit.dragging && ready && rickAt < 0) {
 			const x = ctx.pointer.tx, y = ctx.pointer.ty;
-			if (qiHit(x, y, 20)) hover = QI;
+			const red = redHit(x, y, 20);
+			if (red >= 0) hover = RED_H - red;
+			else if (qiHit(x, y, 20)) hover = QI;
 			else {
 				let holds = false;
 				if (hover >= 0 && alive(hover)) {
@@ -932,7 +1004,7 @@ export const createKessler = (hooks: KesslerHooks = {}): Setup => (ctx) => {
 				if ((!holds || moved) && ++pickTick % 2 === 0) {
 					hover = pickAt(x, y, 16);
 					lastPick = [x, y];
-				} else if (!holds && hover === QI) hover = -1;
+				} else if (!holds && hover < -1) hover = -1;
 			}
 		} else hover = -1;
 		if (hover !== -1) hoverShown = hover;
@@ -1033,10 +1105,38 @@ export const createKessler = (hooks: KesslerHooks = {}): Setup => (ctx) => {
 			gl.uniform1f(uM.uRing, 0);
 			gl.drawArrays(gl.POINTS, 0, 1);
 		}
+		reds.forEach((_, k) => {
+			const t = intro - reds[k].born;
+			// pops out of the flash a beat after the kill
+			const a = easeOut(ramp(t, 0.35, 0.9));
+			if (a <= 0 || occluded(cam.eye, redPos(k, tmp))) return;
+			gl.uniform3fv(uM.uPos, tmp);
+			gl.uniform1f(uM.uSize, (3.4 * dprS + 1) * (1 + 0.6 * (1 - a) + 0.12 * Math.sin(t * 5)));
+			gl.uniform3fv(uM.uColor, C_RED);
+			gl.uniform1f(uM.uAlpha, a);
+			gl.uniform1f(uM.uRing, 0);
+			gl.drawArrays(gl.POINTS, 0, 1);
+		});
 		if (hoverA > 0.01 && hoverShown !== -1) {
 			const isQI = hoverShown === QI;
-			if (!isQI || qiAlive)
+			const red = hoverShown <= RED_H ? RED_H - hoverShown : -1;
+			if (red >= 0) {
+				if (red < reds.length) ring(redPos(red, tmp), 15 + 5 * (1 - hoverA), C_RED, 0.7 * hoverA);
+			} else if (!isQI || qiAlive)
 				ring(isQI ? trackPos : posOf(hoverShown, sim, tmp), 15 + 5 * (1 - hoverA), isQI ? C_SODIUM : C_LIGHT, 0.7 * hoverA);
+		}
+		if (rickAt >= 0) {
+			const t = intro - rickAt;
+			// press: a quick squash, a bounce, then a steady throb while it waits
+			const press = t < 0.08 ? 1 - 0.45 * (t / 0.08) : t < 0.45 ? 0.55 + 1.25 * easeOut((t - 0.08) / 0.37) : 1.8 + 0.25 * Math.sin((t - 0.45) * 7);
+			gl.uniform3fv(uM.uPos, rickPos);
+			gl.uniform1f(uM.uSize, (3.4 * dprS + 1) * press);
+			gl.uniform3fv(uM.uColor, C_RED);
+			gl.uniform1f(uM.uAlpha, 1);
+			gl.uniform1f(uM.uRing, 0);
+			gl.drawArrays(gl.POINTS, 0, 1);
+			// one shockwave as it bursts; the infection spreading through the swarm does the rest
+			if (t < 1.2) ring(rickPos, 14 + 70 * easeOut(t / 1.2), C_RED, 0.55 * (1 - easeOut(t / 1.2)));
 		}
 		const ringT = intro - ringAt;
 		if (ringT < 1.2) {

@@ -114,7 +114,15 @@
 		}, 1400);
 	};
 
-	const setup = createKessler({ track, qi });
+	// never gonna give you up
+	const rick = () => {
+		document.documentElement.style.cursor = 'progress';
+		// coming back via the back button would restore the frozen, pulsing page: start fresh
+		addEventListener('pageshow', (e) => e.persisted && location.reload(), { once: true });
+		location.assign('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+	};
+
+	const setup = createKessler({ track, qi, rick });
 </script>
 
 <svelte:head>
