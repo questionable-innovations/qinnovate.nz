@@ -343,16 +343,44 @@ function invert(m: M4): M4 {
 
 type Cam = { eye: number[]; vp: M4; inv: M4; tanHalf: number; dist: number };
 
-function camera(yaw: number, pitch: number, aspect: number, zoom = 1): Cam {
+// ---- 3x3 rotations (column-major) for a free trackball: no fixed up, so it rolls over the poles
+type R3 = number[];
+const r3 = {
+	y: (a: number): R3 => [Math.cos(a), 0, -Math.sin(a), 0, 1, 0, Math.sin(a), 0, Math.cos(a)],
+	x: (a: number): R3 => [1, 0, 0, 0, Math.cos(a), Math.sin(a), 0, -Math.sin(a), Math.cos(a)],
+	mul: (a: R3, b: R3): R3 => {
+		const o = new Array(9);
+		for (let c = 0; c < 3; c++)
+			for (let r = 0; r < 3; r++) o[c * 3 + r] = a[r] * b[c * 3] + a[3 + r] * b[c * 3 + 1] + a[6 + r] * b[c * 3 + 2];
+		return o;
+	},
+	/** re-orthonormalise after many small multiplications */
+	fix: (m: R3): R3 => {
+		const x = [m[0], m[1], m[2]], y = [m[3], m[4], m[5]];
+		const n = (v: number[]) => {
+			const l = Math.hypot(v[0], v[1], v[2]) || 1;
+			return v.map((c) => c / l);
+		};
+		const X = n(x);
+		const d = X[0] * y[0] + X[1] * y[1] + X[2] * y[2];
+		const Y = n([y[0] - d * X[0], y[1] - d * X[1], y[2] - d * X[2]]);
+		const Z = [X[1] * Y[2] - X[2] * Y[1], X[2] * Y[0] - X[0] * Y[2], X[0] * Y[1] - X[1] * Y[0]];
+		return [...X, ...Y, ...Z];
+	}
+};
+/** the resting view: yaw about the world axis, then pitch */
+const base = (yaw: number, pitch: number) => r3.mul(r3.y(yaw), r3.x(-pitch));
+
+function camera(rot: R3, aspect: number, zoom = 1): Cam {
 	// narrow screens: keep roughly the same horizontal share for the planet by
 	// widening the lens a little and stepping back the rest of the way
 	const need = aspect < 1.2 ? Math.max(1, 0.31 / aspect / Math.tan(19 * DEG)) : 1;
 	const lens = Math.pow(need, 0.45);
 	const dist = DIST * (need / lens) * zoom;
 	const tanHalf = Math.tan(19 * DEG) * lens;
-	const cp = Math.cos(pitch);
-	const eye = [dist * cp * Math.sin(yaw), dist * Math.sin(pitch), dist * cp * Math.cos(yaw)];
-	const view = m4.lookAt(eye, [0, 0, 0]);
+	// camera sits on its local +z, looking at the planet, with its own up
+	const eye = [rot[6] * dist, rot[7] * dist, rot[8] * dist];
+	const view = m4.lookAt(eye, [0, 0, 0], [rot[3], rot[4], rot[5]]);
 	const proj = m4.perspective(2 * Math.atan(tanHalf), aspect, 0.05, 60);
 	// off-axis shift: planet sits lower-left, debris sweeps across the frame
 	const shift = m4.identity();
@@ -606,7 +634,7 @@ export const createKessler = (hooks: KesslerHooks = {}): Setup => (ctx) => {
 	// place the tracked object on the near side, up and to the right, at t = 0
 	let trackM0 = 0;
 	{
-		const cam = camera(YAW0, PITCH0, 1.6);
+		const cam = camera(base(YAW0, PITCH0), 1.6);
 		let best = 1e9;
 		const p = [0, 0, 0];
 		for (let i = 0; i < 360; i++) {
@@ -793,7 +821,10 @@ export const createKessler = (hooks: KesslerHooks = {}): Setup => (ctx) => {
 	let lastPick = [9, 9];
 	let pendingTap: [number, number] | null = null;
 	let nextAuto = 9;
-	let cam = camera(YAW0, PITCH0, ctx.w / ctx.h);
+	let cam = camera(base(YAW0, PITCH0), ctx.w / ctx.h);
+	// the visitor's accumulated drag, applied in the camera's own frame
+	let spin: R3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+	let lastYaw = ctx.orbit.yaw, lastPitch = ctx.orbit.pitch;
 
 	const qiHit = (x: number, y: number, R: number) =>
 		qiAlive && !occluded(cam.eye, trackPos) && pxTo(x, y, trackPos) < R;
@@ -842,11 +873,16 @@ export const createKessler = (hooks: KesslerHooks = {}): Setup => (ctx) => {
 		const k = easeOut(intro / INTRO);
 		const aspect = ctx.w / ctx.h;
 		// no pointer parallax: the dot you aim at has to stay under the cursor
-		const yaw = YAW0 - 0.32 * (1 - k) + sim * DRIFT + ctx.orbit.yaw;
+		const yaw = YAW0 - 0.32 * (1 - k) + sim * DRIFT;
 		// portrait: look up at the belt a little more steeply so it fills the sky
 		const tilt = aspect < 1 ? -0.36 * Math.min(1, (1 - aspect) * 2) : 0;
-		const pitch = Math.max(-1.45, Math.min(1.45, PITCH0 + tilt + 0.12 * (1 - k) + ctx.orbit.pitch));
-		cam = camera(yaw, pitch, aspect, 1 + 0.5 * (1 - k));
+		const pitch = PITCH0 + tilt + 0.12 * (1 - k);
+		// drag (with its inertia) turns the view about the camera's own axes, so it goes over the poles
+		const dy = ctx.orbit.yaw - lastYaw, dp = ctx.orbit.pitch - lastPitch;
+		lastYaw = ctx.orbit.yaw;
+		lastPitch = ctx.orbit.pitch;
+		if (dy || dp) spin = r3.fix(r3.mul(spin, r3.mul(r3.y(dy), r3.x(-dp))));
+		cam = camera(r3.mul(base(yaw, pitch), spin), aspect, 1 + 0.5 * (1 - k));
 		const dprS = Math.sqrt(ctx.dpr);
 		const limb = easeOut(ramp(intro, 0.1, 1.9));
 		const rulesIn = ramp(intro, 1.6, 3.6);

@@ -16,3 +16,4 @@ pnpm deploy   # build + wrangler deploy (needs a wrangler login with access to t
 - `src/lib/stage.ts`: canvas/context plumbing shared by the pieces
 - `src/routes/(options)/1`–`5`: the five design explorations (noindex), ←/→ to step through
 - `static/og.png` is a capture of the page at 1200×630
+- `static/hand/*.json`: 115 handwritten titles pre-generated with [calligrapher.ai](https://www.calligrapher.ai/) (`scripts/generate-handwriting.mjs`, then hand-curated and packed by `scripts/pack-handwriting.mjs`); the page writes one on at random per visit

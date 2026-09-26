@@ -5,4 +5,4 @@
 
 <svelte:head><title>QInnovate</title></svelte:head>
 
-<Stage {setup} ground={GROUND} />
+<Stage {setup} ground={GROUND} options={{ pitchLimit: Infinity }} />
